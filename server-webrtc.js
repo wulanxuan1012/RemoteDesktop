@@ -16,7 +16,7 @@ const input = require('./src/input');
 const PORT = 3000;
 
 const app = express();
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 // 默认页面 - 手机控制端
 app.get('/', (req, res) => {
