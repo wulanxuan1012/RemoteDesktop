@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>远程桌面控制 - WebRTC</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* WebRTC 专用样式 */
+        #remote-video {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            background: #000;
+            display: block;
+        }
+
+        #screen-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            z-index: 1;
+        }
+
+        #status-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 30px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            z-index: 10;
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        #debug-panel {
+            position: fixed;
+            top: 35px;
+            left: 5px;
+            width: 200px;
+            max-height: 300px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #0f0;
+            font-family: monospace;
+            font-size: 10px;
+            overflow-y: auto;
+            border: 1px solid #333;
+            padding: 5px;
+            z-index: 100;
+            pointer-events: none;
+            display: none;
+        }
+
+        #debug-panel.visible {
+            display: block;
+        }
+
+        #play-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            cursor: pointer;
+        }
+
+        #play-overlay.hidden {
+            display: none;
+        }
+
+        .play-btn {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+
+        #toolbar {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 20;
+            display: flex;
+            gap: 10px;
+        }
+
+        .tool-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 24px;
+            backdrop-filter: blur(5px);
+            cursor: pointer;
+        }
+
+        .tool-btn:active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        /* Virtual Keyboard */
+        #virtual-keyboard {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 10px;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        #virtual-keyboard.hidden {
+            display: none;
+        }
+
+        .keyboard-row {
+            display: flex;
+            gap: 5px;
+            justify-content: center;
+        }
+
+        .key-btn {
+            flex: 1;
+            padding: 10px;
+            border-radius: 5px;
+            background: #333;
+            color: white;
+            border: none;
+        }
+
+        .key-btn:active,
+        .key-btn.active {
+            background: #666;
+        }
+
+        #text-input {
+            flex: 2;
+            padding: 10px;
+            border-radius: 5px;
+            border: none;
+        }
+
+        #btn-send-text {
+            flex: 1;
+            border-radius: 5px;
+            border: none;
+            background: #2ed573;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="status-bar">
+        <span id="status-dot"
+            style="width:8px;height:8px;border-radius:50%;background:red;margin-right:5px;display:inline-block;"></span>
+        <span id="status-text">初始化...</span>
+        <span id="fps-counter" style="margin-left:auto;">-- FPS</span>
+    </div>
+
+    <!-- 调试面板 -->
+    <div id="debug-panel"></div>
+
+    <div id="screen-container">
+        <video id="remote-video" autoplay playsinline webkit-playsinline muted></video>
+    </div>
+
+    <!-- 点击播放遮罩 -->
+    <div id="play-overlay" class="hidden">
+        <div class="play-btn">▶️</div>
+        <div id="play-msg">点击开始显示画面</div>
+        <div style="margin-top:10px;font-size:12px;color:#aaa;" id="play-debug-info"></div>
+    </div>
+
+    <div id="toolbar">
+        <button id="btn-debug" class="tool-btn" style="font-size:16px">🐞</button>
+        <button id="btn-keyboard" class="tool-btn">⌨️</button>
+        <button id="btn-fullscreen" class="tool-btn">⛶</button>
+    </div>
+
+    <div id="virtual-keyboard" class="hidden">
+        <div class="keyboard-row">
+            <input type="text" id="text-input" placeholder="输入文本">
+            <button id="btn-send-text">发送</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn" data-key="escape">Esc</button>
+            <button class="key-btn" data-key="tab">Tab</button>
+            <button class="key-btn" data-key="backspace">⌫</button>
+            <button class="key-btn" data-key="enter">Enter</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn modifier" data-key="control">Ctrl</button>
+            <button class="key-btn modifier" data-key="alt">Alt</button>
+            <button class="key-btn modifier" data-key="shift">Shift</button>
+            <button class="key-btn" data-key="space">Space</button>
+        </div>
+    </div>
+
+    <script src="client-webrtc.js"></script>
+</body>
+
+</html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>远程桌面控制 - WebRTC</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* WebRTC 专用样式 */
+        #remote-video {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        #screen-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stats {
+            position: fixed;
+            top: 36px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #0f0;
+            padding: 5px 10px;
+            font-family: monospace;
+            font-size: 12px;
+            border-radius: 4px;
+            z-index: 200;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 连接状态指示器 -->
+    <div id="status-bar">
+        <span id="status-dot"></span>
+        <span id="status-text">正在连接...</span>
+        <span id="fps-counter">-- FPS</span>
+    </div>
+
+    <!-- 统计信息 -->
+    <div class="stats" id="stats"></div>
+
+    <!-- 远程视频 -->
+    <div id="screen-container">
+        <video id="remote-video" autoplay playsinline></video>
+        <div id="loading">
+            <div class="spinner"></div>
+            <p>正在建立 WebRTC 连接...</p>
+        </div>
+    </div>
+
+    <!-- 底部工具栏 -->
+    <div id="toolbar">
+        <button id="btn-keyboard" class="tool-btn" title="键盘">⌨️</button>
+        <button id="btn-mouse" class="tool-btn active" title="鼠标模式">🖱️222</button>
+        <button id="btn-fullscreen" class="tool-btn" title="全屏">⛶111</button>
+    </div>
+
+    <!-- 虚拟键盘 -->
+    <div id="virtual-keyboard" class="hidden">
+        <div class="keyboard-row">
+            <input type="text" id="text-input" placeholder="输入文本后点击发送">
+            <button id="btn-send-text">发送</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn" data-key="escape">Esc</button>
+            <button class="key-btn" data-key="tab">Tab</button>
+            <button class="key-btn" data-key="backspace">退格</button>
+            <button class="key-btn" data-key="enter">回车</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn modifier" data-key="control">Ctrl</button>
+            <button class="key-btn modifier" data-key="alt">Alt</button>
+            <button class="key-btn modifier" data-key="shift">Shift</button>
+            <button class="key-btn" data-key="space">空格</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn" data-key="up">↑</button>
+            <button class="key-btn" data-key="down">↓</button>
+            <button class="key-btn" data-key="left">←</button>
+            <button class="key-btn" data-key="right">→</button>
+        </div>
+    </div>
+
+    <script src="client-webrtc.js"></script>
+</body>
+
+</html>

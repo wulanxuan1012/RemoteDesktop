@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>远程桌面控制</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="status-bar">
+        <span id="status-dot"></span>
+        <span id="status-text">正在连接...</span>
+        <span id="fps-counter">-- FPS</span>
+    </div>
+
+    <div id="screen-container">
+        <video id="remote-video" autoplay playsinline></video>
+        <div id="loading">
+            <div class="spinner"></div>
+            <p id="loading-text">正在连接...</p>
+        </div>
+    </div>
+
+    <div id="toolbar">
+        <button id="btn-keyboard" class="tool-btn">⌨️</button>
+        <button id="btn-fullscreen" class="tool-btn">⛶</button>
+    </div>
+
+    <div id="virtual-keyboard" class="hidden">
+        <div class="keyboard-row">
+            <input type="text" id="text-input" placeholder="输入文本后点击发送">
+            <button id="btn-send-text">发送</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn" data-key="escape">Esc</button>
+            <button class="key-btn" data-key="tab">Tab</button>
+            <button class="key-btn" data-key="backspace">退格</button>
+            <button class="key-btn" data-key="enter">回车</button>
+        </div>
+        <div class="keyboard-row">
+            <button class="key-btn modifier" data-key="control">Ctrl</button>
+            <button class="key-btn modifier" data-key="alt">Alt</button>
+            <button class="key-btn modifier" data-key="shift">Shift</button>
+            <button class="key-btn" data-key="space">空格</button>
+        </div>
+    </div>
+
+    <style>
+        #remote-video {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        #screen-container {
+            position: fixed;
+            top: 36px;
+            left: 0;
+            right: 0;
+            bottom: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f0f1a;
+        }
+    </style>
+
+    <script>
+        class ViewerClient {
+            constructor() {
+                this.video = document.getElementById('remote-video');
+                this.statusDot = document.getElementById('status-dot');
+                this.statusText = document.getElementById('status-text');
+                this.fpsCounter = document.getElementById('fps-counter');
+                this.loading = document.getElementById('loading');
+                this.loadingText = document.getElementById('loading-text');
+                this.keyboard = document.getElementById('virtual-keyboard');
+                this.textInput = document.getElementById('text-input');
+
+                this.ws = null;
+                this.pc = null;
+                this.connected = false;
+                this.modifiers = { control: false, alt: false, shift: false };
+
+                this.init();
+            }
+
+            init() {
+                this.connect();
+                this.bindEvents();
+            }
+
+            connect() {
+                const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(`${protocol}//${location.host}`);
+
+                this.ws.onopen = () => {
+                    this.loadingText.textContent = '等待主机开始共享...';
+                    this.ws.send(JSON.stringify({ type: 'register-viewer' }));
+                };
+
+                this.ws.onmessage = async (event) => {
+                    const message = JSON.parse(event.data);
+                    await this.handleMessage(message);
+                };
+
+                this.ws.onclose = () => {
+                    this.statusDot.classList.remove('connected');
+                    this.statusText.textContent = '连接断开，重连中...';
+                    this.loading.classList.remove('hidden');
+                    setTimeout(() => this.connect(), 3000);
+                };
+            }
+
+            async handleMessage(message) {
+                switch (message.type) {
+                    case 'registered':
+                        console.log('已注册为观看者');
+                        if (message.hostReady) {
+                            this.loadingText.textContent = '正在建立连接...';
+                            await this.startWebRTC();
+                        } else {
+                            this.loadingText.textContent = '等待主机开始共享...\n请在电脑浏览器打开 /host.html';
+                        }
+                        break;
+
+                    case 'host-ready':
+                        this.loadingText.textContent = '主机已就绪，正在连接...';
+                        await this.startWebRTC();
+                        break;
+
+                    case 'host-disconnected':
+                        this.loading.classList.remove('hidden');
+                        this.loadingText.textContent = '主机已断开，等待重新连接...';
+                        if (this.pc) {
+                            this.pc.close();
+                            this.pc = null;
+                        }
+                        break;
+
+                    case 'answer':
+                        console.log('收到 Answer');
+                        await this.pc.setRemoteDescription(new RTCSessionDescription({
+                            type: 'answer',
+                            sdp: message.sdp
+                        }));
+                        break;
+
+                    case 'ice-candidate':
+                        if (this.pc && message.candidate) {
+                            await this.pc.addIceCandidate(new RTCIceCandidate(message.candidate));
+                        }
+                        break;
+                }
+            }
+
+            async startWebRTC() {
+                // 如果已有连接，先关闭
+                if (this.pc) {
+                    this.pc.close();
+                }
+
+                console.log('开始建立 WebRTC 连接...');
+                this.loadingText.textContent = '正在建立 WebRTC 连接...';
+
+                this.pc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                this.pc.ontrack = (event) => {
+                    console.log('收到视频流!', event.streams);
+                    if (event.streams && event.streams[0]) {
+                        this.video.srcObject = event.streams[0];
+                        // 尝试自动播放
+                        this.video.play().then(() => {
+                            console.log('视频开始播放');
+                            this.loading.classList.add('hidden');
+                            this.connected = true;
+                            this.statusDot.classList.add('connected');
+                            this.statusText.textContent = '已连接';
+                        }).catch(err => {
+                            console.error('自动播放失败:', err);
+                            // 添加点击播放提示
+                            this.loadingText.textContent = '点击屏幕开始播放';
+                            this.video.onclick = () => {
+                                this.video.play();
+                                this.loading.classList.add('hidden');
+                                this.connected = true;
+                                this.statusDot.classList.add('connected');
+                                this.statusText.textContent = '已连接';
+                            };
+                        });
+                    }
+                };
+
+                this.pc.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        this.send({ type: 'ice-candidate', candidate: event.candidate });
+                    }
+                };
+
+                this.pc.onconnectionstatechange = () => {
+                    console.log('WebRTC 连接状态:', this.pc.connectionState);
+                    this.loadingText.textContent = '连接状态: ' + this.pc.connectionState;
+                    if (this.pc.connectionState === 'connected') {
+                        this.statusText.textContent = '已连接 (WebRTC)';
+                    } else if (this.pc.connectionState === 'failed') {
+                        this.loadingText.textContent = '连接失败，请刷新重试';
+                    }
+                };
+
+                this.pc.addTransceiver('video', { direction: 'recvonly' });
+
+                const offer = await this.pc.createOffer();
+                await this.pc.setLocalDescription(offer);
+
+                console.log('发送 Offer');
+                this.send({ type: 'offer', sdp: offer.sdp });
+            }
+
+            bindEvents() {
+                this.video.addEventListener('touchstart', (e) => this.handleTouch(e, 'start'));
+                this.video.addEventListener('touchmove', (e) => this.handleTouch(e, 'move'));
+                this.video.addEventListener('touchend', (e) => this.handleTouch(e, 'end'));
+                this.video.addEventListener('click', (e) => this.handleClick(e));
+
+                document.getElementById('btn-keyboard').addEventListener('click', () => {
+                    this.keyboard.classList.toggle('hidden');
+                });
+
+                document.getElementById('btn-fullscreen').addEventListener('click', () => {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else {
+                        document.exitFullscreen();
+                    }
+                });
+
+                document.getElementById('btn-send-text').addEventListener('click', () => {
+                    const text = this.textInput.value;
+                    if (text) {
+                        this.send({ type: 'type', text });
+                        this.textInput.value = '';
+                    }
+                });
+
+                document.querySelectorAll('.key-btn').forEach(btn => {
+                    btn.addEventListener('click', () => this.handleKeyButton(btn));
+                });
+
+                document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+            }
+
+            getRelativePosition(clientX, clientY) {
+                const rect = this.video.getBoundingClientRect();
+                return {
+                    x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+                    y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
+                };
+            }
+
+            handleTouch(event, phase) {
+                event.preventDefault();
+                if (event.touches.length === 0 && phase !== 'end') return;
+
+                const touch = phase === 'end' ? event.changedTouches[0] : event.touches[0];
+                const pos = this.getRelativePosition(touch.clientX, touch.clientY);
+
+                if (phase === 'start') {
+                    this.touchStartTime = Date.now();
+                    this.touchStartPos = pos;
+                    this.send({ type: 'mousemove', ...pos });
+                } else if (phase === 'move') {
+                    this.send({ type: 'mousemove', ...pos });
+                } else if (phase === 'end') {
+                    const duration = Date.now() - this.touchStartTime;
+                    const distance = Math.hypot(pos.x - this.touchStartPos.x, pos.y - this.touchStartPos.y);
+                    if (duration < 300 && distance < 0.02) {
+                        this.send({ type: 'click', ...pos, button: 'left' });
+                    }
+                }
+            }
+
+            handleClick(event) {
+                const pos = this.getRelativePosition(event.clientX, event.clientY);
+                this.send({ type: 'click', ...pos, button: 'left' });
+            }
+
+            handleKeyButton(btn) {
+                const key = btn.dataset.key;
+                if (btn.classList.contains('modifier')) {
+                    this.modifiers[key] = !this.modifiers[key];
+                    btn.classList.toggle('active', this.modifiers[key]);
+                    return;
+                }
+
+                const activeModifiers = Object.entries(this.modifiers)
+                    .filter(([_, active]) => active)
+                    .map(([mod]) => mod);
+
+                this.send({ type: 'keypress', key, modifiers: activeModifiers });
+
+                Object.keys(this.modifiers).forEach(mod => this.modifiers[mod] = false);
+                document.querySelectorAll('.key-btn.modifier').forEach(b => b.classList.remove('active'));
+            }
+
+            send(data) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(data));
+                }
+            }
+        }
+
+        new ViewerClient();
+    </script>
+</body>
+
+</html>
