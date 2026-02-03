@@ -59,9 +59,15 @@ class WebRTCClient {
      */
     connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${location.host}`;
 
-        this.log(`连接 WebSocket: ${wsUrl}`);
+        // 从 Cookie 获取认证 Token
+        const tokenMatch = document.cookie.match(/auth_token=([^;]+)/);
+        const token = tokenMatch ? tokenMatch[1] : '';
+
+        // 将 Token 附加到 WebSocket URL
+        const wsUrl = `${protocol}//${location.host}?token=${encodeURIComponent(token)}`;
+
+        this.log(`连接 WebSocket: ${wsUrl.substring(0, 50)}...`);
 
         this.ws = new WebSocket(wsUrl);
 
@@ -268,21 +274,56 @@ class WebRTCClient {
             if (e.buttons === 1) this.handleMouseMove(e);
         });
 
+        // 通用绑定函数
+        const bindBtn = (id, handler) => {
+            const el = document.getElementById(id);
+            if (el) {
+                const wrapper = (e) => {
+                    // 防止点击穿透和双重触发
+                    if (e.cancelable) e.preventDefault();
+                    e.stopPropagation();
+                    handler(e);
+                };
+                el.addEventListener('touchend', wrapper);
+                el.addEventListener('click', wrapper);
+            }
+        };
+
         // 工具栏按钮
-        document.getElementById('btn-keyboard')?.addEventListener('click', () => this.toggleKeyboard());
-        document.getElementById('btn-fullscreen')?.addEventListener('click', () => this.toggleFullscreen());
+        bindBtn('btn-keyboard', () => this.toggleKeyboard());
+        bindBtn('btn-fullscreen', () => this.toggleFullscreen());
 
         // 虚拟键盘
-        document.getElementById('btn-send-text')?.addEventListener('click', () => this.sendText());
+        bindBtn('btn-send-text', () => this.sendText());
         document.querySelectorAll('.key-btn').forEach(btn => {
-            btn.addEventListener('click', () => this.handleKeyButton(btn));
+            const wrapper = (e) => {
+                if (e.cancelable) e.preventDefault();
+                e.stopPropagation();
+                this.handleKeyButton(btn);
+            };
+            btn.addEventListener('touchend', wrapper);
+            btn.addEventListener('click', wrapper);
         });
 
-        // 阻止默认行为
+        // 阻断调试面板的事件冒泡，防止误触视频
+        const debugPanel = document.getElementById('debug-panel');
+        if (debugPanel) {
+            ['touchstart', 'touchmove', 'touchend', 'mousedown', 'mousemove', 'mouseup', 'click'].forEach(evt => {
+                debugPanel.addEventListener(evt, (e) => {
+                    e.stopPropagation(); // 阻止冒泡到 video 或 document
+                    // 不要 preventDefault，否则无法滚动
+                }, { passive: false });
+            });
+        }
+
+        // 阻止默认行为（防止滚动），但允许特定区域交互
         document.addEventListener('touchmove', (e) => {
-            if (e.target !== this.debugPanel) {
-                e.preventDefault();
+            if (e.target.closest('#debug-panel') ||
+                e.target.closest('#toolbar') ||
+                e.target.closest('#virtual-keyboard')) {
+                return;
             }
+            e.preventDefault();
         }, { passive: false });
     }
 

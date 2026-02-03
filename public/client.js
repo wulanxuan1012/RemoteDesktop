@@ -39,7 +39,13 @@ class RemoteDesktopClient {
      */
     connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${location.host}`;
+
+        // 从 Cookie 获取认证 Token
+        const tokenMatch = document.cookie.match(/auth_token=([^;]+)/);
+        const token = tokenMatch ? tokenMatch[1] : '';
+
+        // 将 Token 附加到 WebSocket URL
+        const wsUrl = `${protocol}//${location.host}?token=${encodeURIComponent(token)}`;
 
         this.statusText.textContent = '正在连接...';
 

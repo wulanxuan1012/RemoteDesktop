@@ -59,7 +59,8 @@
             border: 1px solid #333;
             padding: 5px;
             z-index: 100;
-            pointer-events: none;
+            pointer-events: auto;
+            /* 允许交互 */
             display: none;
         }
 
@@ -169,6 +170,15 @@
             background: #2ed573;
             color: white;
         }
+
+        /* 登出按钮 */
+        #btn-logout {
+            background: #ff4757 !important;
+        }
+
+        #btn-logout:hover {
+            background: #ff6b7a !important;
+        }
     </style>
 </head>
 
@@ -194,10 +204,11 @@
         <div style="margin-top:10px;font-size:12px;color:#aaa;" id="play-debug-info"></div>
     </div>
 
-    <div id="toolbar">
+    <div id="toolbar" style="z-index: 200;">
         <button id="btn-debug" class="tool-btn" style="font-size:16px">🐞</button>
         <button id="btn-keyboard" class="tool-btn">⌨️</button>
         <button id="btn-fullscreen" class="tool-btn">⛶</button>
+        <button id="btn-logout" class="tool-btn" title="登出">🚪</button>
     </div>
 
     <div id="virtual-keyboard" class="hidden">
@@ -220,7 +231,34 @@
     </div>
 
     <!-- 引用外部 JS，使用时间戳避免缓存 -->
-    <script src="client-webrtc.js?v=2.2"></script>
+    <script src="client-webrtc.js?v=2.4"></script>
+    <script>
+        // 登出功能
+        const btnLogout = document.getElementById('btn-logout');
+        if (btnLogout) {
+            const handleLogout = async (e) => {
+                console.log('🔴 登出按钮被点击', e.type);
+
+                // 防止多次触发（移动端 touch + click）
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (confirm('确定要登出吗？')) {
+                    console.log('用户确认登出...');
+                    try {
+                        await fetch('/api/auth/logout', { method: 'POST' });
+                    } catch (e) { console.error(e); }
+
+                    document.cookie = 'auth_token=; path=/; max-age=0';
+                    window.location.href = '/login.html';
+                }
+            };
+
+            // 同时监听 touch 和 click 以兼容移动端
+            btnLogout.addEventListener('touchend', handleLogout);
+            btnLogout.addEventListener('click', handleLogout);
+        }
+    </script>
 </body>
 
 </html>

@@ -13,6 +13,7 @@
 const WebSocket = require('ws');
 const { captureScreenBuffer } = require('./capture');
 const input = require('./input');
+const auth = require('./auth');
 
 class WebSocketServer {
     constructor(httpServer, frameInterval = 33) {
@@ -27,9 +28,27 @@ class WebSocketServer {
         this.init();
     }
 
+    // 检查是否为本机 IP
+    isLocalIP(ip) {
+        return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    }
+
     init() {
         this.wss.on('connection', (ws, req) => {
             const clientIP = req.socket.remoteAddress;
+
+            // 远程连接需要验证 Token
+            if (!this.isLocalIP(clientIP)) {
+                const url = new URL(req.url, `http://${req.headers.host}`);
+                const token = url.searchParams.get('token');
+
+                if (!token || !auth.validateSession(token)) {
+                    console.log(`[拒绝] 未授权连接: ${clientIP}`);
+                    ws.close(4001, 'Unauthorized');
+                    return;
+                }
+            }
+
             console.log(`[连接] 新客户端: ${clientIP}`);
 
             this.clients.add(ws);
